@@ -1,0 +1,8 @@
+alembic
+sqlalchemy
+psycopg2-binary
+python-dotenv
+cryptography
+imapclient
+pika
+# Add other dependencies as they arise e.g. python-dotenv
