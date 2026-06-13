@@ -1,12 +1,12 @@
 # app/services/email_service.py
 from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session
+import logging # Setup later
 from app.models import Mailbox, Email, BlockedSender
 from app.services import imap_service
 from app.db import SessionLocal # For standalone execution or specific cases
-# import logging # Setup later
 
-# logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 def get_active_mailboxes(db: Session) -> List[Mailbox]:
     """Fetches all mailboxes where is_active = TRUE."""
@@ -20,11 +20,10 @@ def update_mailbox_last_checked_uids(db: Session, mailbox_id: int, new_uid_map: 
         # For this case, last_checked_uid_map is a full replacement from the latest fetch.
         mailbox.last_checked_uid_map = new_uid_map
         db.commit()
-        # logger.info(f"Updated last_checked_uid_map for mailbox ID {mailbox_id}: {new_uid_map}")
+        logger.info(f"Updated last_checked_uid_map for mailbox ID {mailbox_id}: {new_uid_map}")
     else:
-        # logger.warning(f"Mailbox ID {mailbox_id} not found for UID map update.")
+        logger.warning(f"Mailbox ID {mailbox_id} not found for UID map update.")
         # Consider raising an error if this is unexpected
-        print(f"Warning: Mailbox ID {mailbox_id} not found for UID map update.") # Placeholder log
         pass
 
 def is_sender_permanently_blocked(db: Session, sender_address: Optional[str]) -> bool:
@@ -58,7 +57,7 @@ def save_email_to_db(db: Session, email_data: Dict[str, Any], mailbox_id: int,
 
     # Defensive check for received_at_header if status is not error_ingestion
     if processing_status != 'error_ingestion' and email_data.get("received_at_header") is None:
-        # logger.error(f"Attempted to save email (UID: {email_data.get('message_uid')}) with 'new' status but missing received_at_header.")
+        logger.error(f"Attempted to save email (UID: {email_data.get('message_uid')}) with 'new' status but missing received_at_header.")
         # This situation should ideally be caught by the caller (process_mailbox_emails)
         # and status set to 'error_ingestion' explicitly.
         # Raising an error here to make it clear.
@@ -84,7 +83,7 @@ def save_email_to_db(db: Session, email_data: Dict[str, Any], mailbox_id: int,
     db.add(new_email)
     db.commit()
     db.refresh(new_email)
-    # logger.info(f"Saved email ID {new_email.id} (UID: {new_email.message_uid}) from mailbox {mailbox_id} with status {processing_status}")
+    logger.info(f"Saved email ID {new_email.id} (UID: {new_email.message_uid}) from mailbox {mailbox_id} with status {processing_status}")
     return new_email
 
 def update_email_status(db: Session, email_id: int, new_status: str, error_details: Optional[str] = None) -> bool:
@@ -97,9 +96,9 @@ def update_email_status(db: Session, email_id: int, new_status: str, error_detai
         elif new_status != 'error_ingestion': # Clear error_details if status is not error
              email.error_details = None
         db.commit()
-        # logger.info(f"Updated status of email ID {email_id} to {new_status}")
+        logger.info(f"Updated status of email ID {email_id} to {new_status}")
         return True
-    # logger.warning(f"Email ID {email_id} not found for status update.")
+    logger.warning(f"Email ID {email_id} not found for status update.")
     return False
 
 def process_mailbox_emails(db: Session, mailbox: Mailbox) -> Tuple[List[Email], List[Dict[str, Any]]]:
@@ -111,29 +110,28 @@ def process_mailbox_emails(db: Session, mailbox: Mailbox) -> Tuple[List[Email], 
     successfully_saved_emails: List[Email] = []
     errored_emails_data: List[Dict[str, Any]] = []
 
-    # logger.info(f"Processing mailbox: {mailbox.email_address} (ID: {mailbox.id})")
-    print(f"INFO: Processing mailbox: {mailbox.email_address} (ID: {mailbox.id})") # Placeholder log
+    logger.info(f"Processing mailbox: {mailbox.email_address} (ID: {mailbox.id})")
     try:
         fetched_emails_data, new_uid_map = imap_service.fetch_emails_from_mailbox(mailbox)
     except ValueError as e:
-        print(f"ERROR: IMAP configuration error for mailbox {mailbox.email_address}: {e}")
+        logger.error(f"IMAP configuration error for mailbox {mailbox.email_address}: {e}", exc_info=True)
         return [], []
     except ConnectionError as e:
-        print(f"ERROR: IMAP connection error for mailbox {mailbox.email_address}: {e}")
+        logger.error(f"IMAP connection error for mailbox {mailbox.email_address}: {e}", exc_info=True)
         return [], []
     except RuntimeError as e:
-        print(f"ERROR: IMAP runtime error for mailbox {mailbox.email_address}: {e}")
+        logger.error(f"IMAP runtime error for mailbox {mailbox.email_address}: {e}", exc_info=True)
         return [], []
     except Exception as e:
-        print(f"ERROR: Unexpected error fetching emails for {mailbox.email_address}: {e}")
+        logger.error(f"Unexpected error fetching emails for {mailbox.email_address}: {e}", exc_info=True)
         return [], []
 
-    print(f"INFO: Fetched {len(fetched_emails_data)} email(s) from IMAP for {mailbox.email_address}")
+    logger.info(f"Fetched {len(fetched_emails_data)} email(s) from IMAP for {mailbox.email_address}")
 
     for email_data in fetched_emails_data:
         try:
             if not email_data.get("message_uid") or not email_data.get("folder_name"):
-                print(f"ERROR: Essential data missing (UID or folder) for an email from {mailbox.email_address}. Skipping.")
+                logger.error(f"Essential data missing (UID or folder) for an email from {mailbox.email_address}. Skipping.")
                 errored_emails_data.append({
                     "message_uid": email_data.get('message_uid'),
                     "error": "Essential data missing (UID or folder)"
@@ -144,11 +142,11 @@ def process_mailbox_emails(db: Session, mailbox: Mailbox) -> Tuple[List[Email], 
                 db, str(email_data["message_uid"]), email_data["folder_name"], mailbox.id
             )
             if existing_email:
-                print(f"INFO: Duplicate email skipped: UID {email_data['message_uid']} in {email_data['folder_name']} for mailbox {mailbox.id}")
+                logger.info(f"Duplicate email skipped: UID {email_data['message_uid']} in {email_data['folder_name']} for mailbox {mailbox.id}")
                 continue
 
             if email_data.get("received_at_header") is None:
-                print(f"ERROR: Email UID {email_data['message_uid']} for mailbox {mailbox.id} is missing 'received_at_header'. Saving as error_ingestion.")
+                logger.error(f"Email UID {email_data['message_uid']} for mailbox {mailbox.id} is missing 'received_at_header'. Saving as error_ingestion.")
                 # This will likely fail if DB received_at_header is NOT NULL, caught by outer try-except
                 saved_email = save_email_to_db(
                     db, email_data, mailbox.id,
@@ -160,7 +158,7 @@ def process_mailbox_emails(db: Session, mailbox: Mailbox) -> Tuple[List[Email], 
 
             current_sender_address = email_data.get("sender_address")
             if is_sender_permanently_blocked(db, current_sender_address):
-                print(f"INFO: Sender {current_sender_address} is permanently blocked. Email UID {email_data['message_uid']} quarantined.")
+                logger.info(f"Sender {current_sender_address} is permanently blocked. Email UID {email_data['message_uid']} quarantined.")
                 saved_email = save_email_to_db(
                     db, email_data, mailbox.id, processing_status='spam_quarantined'
                 )
@@ -170,10 +168,10 @@ def process_mailbox_emails(db: Session, mailbox: Mailbox) -> Tuple[List[Email], 
             successfully_saved_emails.append(saved_email_obj)
 
         except ValueError as ve: # Catch specific errors like missing received_at_header from save_email_to_db
-            print(f"ERROR: Failed to save email UID {email_data.get('message_uid')} for mailbox {mailbox.id} due to validation: {ve}")
+            logger.error(f"Failed to save email UID {email_data.get('message_uid')} for mailbox {mailbox.id} due to validation: {ve}", exc_info=True)
             errored_emails_data.append({"message_uid": email_data.get('message_uid'), "error": f"Validation error: {str(ve)}"})
         except Exception as e: # Catch DB errors or other unexpected issues during individual email processing
-            print(f"ERROR: Failed to save or process email UID {email_data.get('message_uid')} for mailbox {mailbox.id}: {e}")
+            logger.error(f"Failed to save or process email UID {email_data.get('message_uid')} for mailbox {mailbox.id}: {e}", exc_info=True)
             error_description = f"Error processing/saving email: {str(e)}"
             # Try to save with error_ingestion status, this is a best effort.
             # This path is taken if, for example, received_at_header was None and save_email_to_db failed the INSERT.
@@ -190,7 +188,7 @@ def process_mailbox_emails(db: Session, mailbox: Mailbox) -> Tuple[List[Email], 
 
                 if err_save_data.get("received_at_header") is None:
                      # This is the problematic scenario. If we can't save it with None, we log and skip.
-                     print(f"CRITICAL: Cannot save error record for UID {err_save_data.get('message_uid')} because received_at_header is None and DB column is NOT NULL.")
+                     logger.critical(f"Cannot save error record for UID {err_save_data.get('message_uid')} because received_at_header is None and DB column is NOT NULL.")
                      errored_emails_data.append({
                          "message_uid": err_save_data.get('message_uid'),
                          "error": f"Original error: {error_description}. Also, cannot save error record due to missing received_at_header."
@@ -203,37 +201,39 @@ def process_mailbox_emails(db: Session, mailbox: Mailbox) -> Tuple[List[Email], 
                     )
                     errored_emails_data.append({"db_email_id": saved_err_email.id, "error": error_description})
             except Exception as e_save_err:
-                print(f"CRITICAL: Failed even to save email UID {email_data.get('message_uid')} with error status: {e_save_err}")
+                logger.critical(f"Failed even to save email UID {email_data.get('message_uid')} with error status: {e_save_err}", exc_info=True)
                 errored_emails_data.append({"message_uid": email_data.get('message_uid'), "error": f"Failed to save error record: {e_save_err}. Original error: {error_description}"})
 
     if fetched_emails_data or (new_uid_map and new_uid_map != (mailbox.last_checked_uid_map or {})):
         if new_uid_map:
             update_mailbox_last_checked_uids(db, mailbox.id, new_uid_map)
 
-    print(f"INFO: Finished processing for mailbox {mailbox.email_address}. Saved: {len(successfully_saved_emails)}, Errored: {len(errored_emails_data)}")
+    logger.info(f"Finished processing for mailbox {mailbox.email_address}. Saved: {len(successfully_saved_emails)}, Errored: {len(errored_emails_data)}")
     return successfully_saved_emails, errored_emails_data
 
 # Example usage
 # if __name__ == '__main__':
+#     # Basic logging for standalone script execution
+#     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 #     db_session = SessionLocal()
 #     try:
 #         active_mailboxes = get_active_mailboxes(db_session)
-#         print(f"Found {len(active_mailboxes)} active mailboxes.")
+#         logger.info(f"Found {len(active_mailboxes)} active mailboxes.")
 #         for mbx in active_mailboxes:
-#             print(f"Processing: {mbx.email_address} (ID: {mbx.id})")
+#             logger.info(f"Processing: {mbx.email_address} (ID: {mbx.id})")
 #             if mbx.imap_password_encrypted and mbx.imap_host:
 #                 try:
 #                     saved, errored = process_mailbox_emails(db_session, mbx)
-#                     print(f"  Saved {len(saved)} emails for {mbx.email_address}.")
+#                     logger.info(f"  Saved {len(saved)} emails for {mbx.email_address}.")
 #                     # for email_obj in saved:
-#                     #     print(f"    - ID: {email_obj.id}, Subject: {email_obj.subject}")
+#                     #     logger.debug(f"    - ID: {email_obj.id}, Subject: {email_obj.subject}")
 #                     if errored:
-#                         print(f"  Errored {len(errored)} emails for {mbx.email_address}.")
+#                         logger.warning(f"  Errored {len(errored)} emails for {mbx.email_address}.")
 #                         # for err_info in errored:
-#                         #     print(f"    - UID/ID: {err_info.get('message_uid') or err_info.get('db_email_id')}, Error: {err_info.get('error')}")
+#                         #     logger.debug(f"    - UID/ID: {err_info.get('message_uid') or err_info.get('db_email_id')}, Error: {err_info.get('error')}")
 #                 except Exception as e:
-#                     print(f"  Error processing mailbox {mbx.email_address} during test: {e}", exc_info=True)
+#                     logger.error(f"  Error processing mailbox {mbx.email_address} during test: {e}", exc_info=True)
 #             else:
-#                 print(f"  Skipping mailbox {mbx.email_address} due to missing IMAP configuration for test.")
+#                 logger.warning(f"  Skipping mailbox {mbx.email_address} due to missing IMAP configuration for test.")
 #     finally:
 #         db_session.close()

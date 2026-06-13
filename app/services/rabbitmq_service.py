@@ -7,10 +7,10 @@ from app.models import Email as EmailModel # To avoid confusion
 from app.services.email_service import update_email_status # To update status after publishing
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone # Added for mock email testing
+import logging
 
-# import logging
 
-# logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _rabbitmq_url = settings.RABBITMQ_URL
 _queue_name = settings.RABBITMQ_EMAIL_PROCESSING_QUEUE
@@ -24,11 +24,11 @@ def _get_rabbitmq_connection() -> pika.BlockingConnection:
         try:
             params = pika.URLParameters(_rabbitmq_url)
             _connection = pika.BlockingConnection(params)
-            # logger.info("Successfully connected to RabbitMQ.")
-            print("INFO: Successfully connected to RabbitMQ.")
+            logger.info("Successfully connected to RabbitMQ.")
+            # print("INFO: Successfully connected to RabbitMQ.")
         except pika.exceptions.AMQPConnectionError as e:
-            # logger.error(f"Failed to connect to RabbitMQ at {_rabbitmq_url}: {e}", exc_info=True)
-            print(f"ERROR: Failed to connect to RabbitMQ at {_rabbitmq_url}: {e}")
+            logger.error(f"Failed to connect to RabbitMQ at {_rabbitmq_url}: {e}", exc_info=True)
+            # print(f"ERROR: Failed to connect to RabbitMQ at {_rabbitmq_url}: {e}")
             _connection = None
             raise ConnectionError(f"Failed to connect to RabbitMQ: {e}")
     return _connection
@@ -39,24 +39,24 @@ def _get_rabbitmq_channel() -> pika.channel.Channel:
     # conn should not be None here due to error handling in _get_rabbitmq_connection
     # but as a defensive check if logic changes:
     if conn is None:
-         print("ERROR: RabbitMQ connection is not available (should have been raised earlier).")
+         logger.error("RabbitMQ connection is not available (should have been raised earlier).")
          raise ConnectionError("RabbitMQ connection is not available.")
 
     if _channel is None or _channel.is_closed:
         try:
             _channel = conn.channel()
             _channel.queue_declare(queue=_queue_name, durable=True)
-            # logger.info(f"RabbitMQ channel obtained and queue '{_queue_name}' declared.")
-            print(f"INFO: RabbitMQ channel obtained and queue '{_queue_name}' declared.")
+            logger.info(f"RabbitMQ channel obtained and queue '{_queue_name}' declared.")
+            # print(f"INFO: RabbitMQ channel obtained and queue '{_queue_name}' declared.")
         except (pika.exceptions.AMQPChannelError, pika.exceptions.AMQPConnectionError) as e:
-            # logger.error(f"Failed to open RabbitMQ channel or declare queue: {e}", exc_info=True)
-            print(f"ERROR: Failed to open RabbitMQ channel or declare queue: {e}")
+            logger.error(f"Failed to open RabbitMQ channel or declare queue: {e}", exc_info=True)
+            # print(f"ERROR: Failed to open RabbitMQ channel or declare queue: {e}")
             _channel = None
             if _connection and _connection.is_open: # Use the global _connection
                 try:
                     _connection.close()
                 except Exception as close_exc:
-                    print(f"WARNING: Exception while closing RabbitMQ connection after channel error: {close_exc}")
+                    logger.warning(f"Exception while closing RabbitMQ connection after channel error: {close_exc}", exc_info=True)
             _connection = None
             raise ConnectionError(f"Failed to open RabbitMQ channel or declare queue: {e}")
     return _channel
@@ -75,7 +75,7 @@ def publish_email_message(email: EmailModel, db: Session) -> bool:
         # This might be too aggressive or cause issues depending on session state.
         # For now, let's assume if email.mailbox is None, we proceed with None.
         # Consider logging a warning if mailbox relationship is expected but not loaded.
-        # print(f"WARNING: Mailbox relationship not loaded for Email ID {email.id} during RabbitMQ publish.")
+        logger.warning(f"Mailbox relationship not loaded for Email ID {email.id} during RabbitMQ publish.")
         pass
 
 
@@ -103,20 +103,20 @@ def publish_email_message(email: EmailModel, db: Session) -> bool:
                 delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE
             )
         )
-        # logger.info(f"Email ID {email.id} published to RabbitMQ queue '{_queue_name}'.")
-        print(f"INFO: Email ID {email.id} published to RabbitMQ queue '{_queue_name}'.")
+        logger.info(f"Email ID {email.id} published to RabbitMQ queue '{_queue_name}'.")
+        # print(f"INFO: Email ID {email.id} published to RabbitMQ queue '{_queue_name}'.")
 
         status_updated = update_email_status(db, email.id, 'queued_for_deepseek')
         if not status_updated:
-            # logger.warning(f"Message for email ID {email.id} published, but DB status update failed.")
-            print(f"WARNING: Message for email ID {email.id} published, but DB status update failed.")
+            logger.warning(f"Message for email ID {email.id} published, but DB status update failed.")
+            # print(f"WARNING: Message for email ID {email.id} published, but DB status update failed.")
             return False
 
         return True
 
     except (pika.exceptions.AMQPConnectionError, pika.exceptions.AMQPChannelError) as e:
-        # logger.error(f"RabbitMQ connection/channel error publishing email ID {email.id}: {e}", exc_info=True)
-        print(f"ERROR: RabbitMQ connection/channel error publishing email ID {email.id}: {e}")
+        logger.error(f"RabbitMQ connection/channel error publishing email ID {email.id}: {e}", exc_info=True)
+        # print(f"ERROR: RabbitMQ connection/channel error publishing email ID {email.id}: {e}")
         global _connection, _channel # Declare them global to modify
         if _channel and _channel.is_open:
             try: _channel.close()
@@ -128,8 +128,8 @@ def publish_email_message(email: EmailModel, db: Session) -> bool:
         _connection = None
         return False
     except Exception as e:
-        # logger.error(f"Unexpected error publishing email ID {email.id}: {e}", exc_info=True)
-        print(f"ERROR: Unexpected error publishing email ID {email.id}: {e}")
+        logger.error(f"Unexpected error publishing email ID {email.id}: {e}", exc_info=True)
+        # print(f"ERROR: Unexpected error publishing email ID {email.id}: {e}")
         return False
 
 def close_rabbitmq_connection():
@@ -138,11 +138,11 @@ def close_rabbitmq_connection():
     try:
         if _channel and _channel.is_open:
             _channel.close()
-            # logger.info("RabbitMQ channel closed.")
-            print("INFO: RabbitMQ channel closed.")
+            logger.info("RabbitMQ channel closed.")
+            # print("INFO: RabbitMQ channel closed.")
     except Exception as e:
-        # logger.warning(f"Error closing RabbitMQ channel: {e}", exc_info=True)
-        print(f"WARNING: Error closing RabbitMQ channel: {e}")
+        logger.warning(f"Error closing RabbitMQ channel: {e}", exc_info=True)
+        # print(f"WARNING: Error closing RabbitMQ channel: {e}")
         pass # nosemgrep
     finally:
         _channel = None
@@ -150,19 +150,20 @@ def close_rabbitmq_connection():
     try:
         if _connection and _connection.is_open:
             _connection.close()
-            # logger.info("RabbitMQ connection closed.")
-            print("INFO: RabbitMQ connection closed.")
+            logger.info("RabbitMQ connection closed.")
+            # print("INFO: RabbitMQ connection closed.")
     except Exception as e:
-        # logger.warning(f"Error closing RabbitMQ connection: {e}", exc_info=True)
-        print(f"WARNING: Error closing RabbitMQ connection: {e}")
+        logger.warning(f"Error closing RabbitMQ connection: {e}", exc_info=True)
+        # print(f"WARNING: Error closing RabbitMQ connection: {e}")
         pass # nosemgrep
     finally:
         _connection = None
 
 # Example Usage (for testing this module directly):
 # if __name__ == '__main__':
-#     print(f"RabbitMQ URL: {settings.RABBITMQ_URL}")
-#     print(f"Queue Name: {_queue_name}")
+#     logging.basicConfig(level=logging.INFO) # Basic logging for test
+#     logger.info(f"RabbitMQ URL: {settings.RABBITMQ_URL}")
+#     logger.info(f"Queue Name: {_queue_name}")
 
 #     class MockMailbox:
 #         email_address = "test_mailbox@example.com"
@@ -184,8 +185,8 @@ def close_rabbitmq_connection():
 
 #     # Mocking the DB session and update_email_status for the test
 #     class MockDBSession:
-#         def commit(self): print("MockDBSession: commit() called")
-#         def refresh(self, obj): print(f"MockDBSession: refresh({obj}) called")
+#         def commit(self): logger.info("MockDBSession: commit() called")
+#         def refresh(self, obj): logger.info(f"MockDBSession: refresh({obj}) called")
 
 #     mock_db_session = MockDBSession()
 
@@ -193,7 +194,7 @@ def close_rabbitmq_connection():
 
 #     # Redefine update_email_status in the local scope of this test block
 #     def mock_update_email_status_for_test(db_session, email_id, new_status):
-#         print(f"MOCK: update_email_status called for email ID {email_id} to {new_status} with session {type(db_session)}")
+#         logger.info(f"MOCK: update_email_status called for email ID {email_id} to {new_status} with session {type(db_session)}")
 #         if email_id == test_email_obj.id and new_status == 'queued_for_deepseek':
 #             return True
 #         return False

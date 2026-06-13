@@ -8,9 +8,10 @@ from typing import List, Dict, Optional, Any, Tuple
 from imapclient import IMAPClient
 from app.models import Mailbox as MailboxModel # To avoid confusion with mailbox objects
 from app.services.encryption_service import decrypt_password
-# Import logging configuration later when it's set up
-# import logging
+import logging
 # logger = logging.getLogger(__name__)
+
+logger = logging.getLogger(__name__)
 
 def _decode_header_value(header_value: Any) -> Optional[str]: # Changed type hint for header_value
     if header_value is None:
@@ -38,7 +39,7 @@ def _decode_header_value(header_value: Any) -> Optional[str]: # Changed type hin
         decoded_parts = decode_header(header_value)
         return str(make_header(decoded_parts))
     except Exception: # Broad exception for parsing issues
-        # logger.warning(f"Could not decode header value: {header_value}", exc_info=True)
+        logger.warning(f"Could not decode header value: {header_value}", exc_info=True)
         # Fallback to returning the raw value if it's already a string, or a representation
         if isinstance(header_value, str):
             return header_value
@@ -75,8 +76,8 @@ def fetch_emails_from_mailbox(mailbox_config: MailboxModel) -> Tuple[List[Dict[s
     decrypted_password_str = decrypt_password(mailbox_config.imap_password_encrypted)
 
     if not decrypted_password_str:
-        # logger.error(f"IMAP password for {mailbox_config.email_address} is missing or decryption failed.")
-        print(f"IMAP password for {mailbox_config.email_address} is missing or decryption failed.")
+        logger.error(f"IMAP password for {mailbox_config.email_address} is missing or decryption failed.")
+        # print(f"IMAP password for {mailbox_config.email_address} is missing or decryption failed.")
         raise ValueError(f"IMAP password for {mailbox_config.email_address} is missing or decryption failed.")
 
     # Initialize new_last_uid_map with existing values to preserve UIDs for folders not processed or empty
@@ -86,13 +87,13 @@ def fetch_emails_from_mailbox(mailbox_config: MailboxModel) -> Tuple[List[Dict[s
     try:
         with IMAPClient(host=mailbox_config.imap_host, port=mailbox_config.imap_port, ssl=True) as client:
             client.login(mailbox_config.imap_login, decrypted_password_str)
-            # logger.info(f"Successfully logged into {mailbox_config.email_address}")
+            logger.info(f"Successfully logged into {mailbox_config.email_address}")
 
             for folder_name in mailbox_config.monitored_folders:
                 current_folder_highest_uid = new_last_uid_map.get(folder_name, 0)
                 try:
                     client.select_folder(folder_name, readonly=True)
-                    # logger.info(f"Selected folder: {folder_name} for {mailbox_config.email_address}")
+                    logger.info(f"Selected folder: {folder_name} for {mailbox_config.email_address}")
 
                     last_uid_processed_in_db = mailbox_config.last_checked_uid_map.get(folder_name, 0) if mailbox_config.last_checked_uid_map else 0
 
@@ -101,10 +102,10 @@ def fetch_emails_from_mailbox(mailbox_config: MailboxModel) -> Tuple[List[Dict[s
                     message_uids_on_server = client.search(search_criteria)
 
                     if not message_uids_on_server:
-                        # logger.info(f"No new messages in {folder_name} for {mailbox_config.email_address} since UID {last_uid_processed_in_db}")
+                        logger.info(f"No new messages in {folder_name} for {mailbox_config.email_address} since UID {last_uid_processed_in_db}")
                         continue
 
-                    # logger.info(f"Found {len(message_uids_on_server)} new messages in {folder_name} for {mailbox_config.email_address}")
+                    logger.info(f"Found {len(message_uids_on_server)} new messages in {folder_name} for {mailbox_config.email_address}")
 
                     for uid, message_data in client.fetch(message_uids_on_server, ['RFC822', 'INTERNALDATE']).items():
                         email_bytes = message_data[b'RFC822']
@@ -148,7 +149,7 @@ def fetch_emails_from_mailbox(mailbox_config: MailboxModel) -> Tuple[List[Dict[s
                                 pass
 
                         if received_at_header_dt and received_at_header_dt.tzinfo is None:
-                            # logger.warning(f"Date {received_at_header_dt} for email UID {uid} is naive. Assuming UTC.")
+                            logger.warning(f"Date {received_at_header_dt} for email UID {uid} in folder {folder_name} for {mailbox_config.email_address} is naive. Assuming UTC.")
                             received_at_header_dt = received_at_header_dt.replace(tzinfo=timezone.utc)
                         elif received_at_header_dt: # Ensure it's UTC if it has timezone
                             received_at_header_dt = received_at_header_dt.astimezone(timezone.utc)
@@ -185,7 +186,7 @@ def fetch_emails_from_mailbox(mailbox_config: MailboxModel) -> Tuple[List[Dict[s
 
                         # Fallback: if only HTML is present, use it as text_body (or implement html-to-text)
                         if body_text is None and body_html is not None:
-                            # logger.info(f"Email UID {uid} has HTML body but no plain text. Consider HTML-to-text conversion.")
+                            logger.info(f"Email UID {uid} in folder {folder_name} for {mailbox_config.email_address} has HTML body but no plain text. Consider HTML-to-text conversion.")
                             # For now, we are not converting HTML to text.
                             # If requirements change, a library like html2text could be used here.
                             pass # body_text remains None if no plain text part found
@@ -213,25 +214,25 @@ def fetch_emails_from_mailbox(mailbox_config: MailboxModel) -> Tuple[List[Dict[s
 
 
                 except IMAPClient.Error as e:
-                    print(f"IMAP Error for {mailbox_config.email_address}, folder {folder_name}: {e}")
+                    logger.error(f"IMAP Error for {mailbox_config.email_address}, folder {folder_name}: {e}", exc_info=True)
                     continue
                 except Exception as e:
-                    print(f"Generic error processing folder {folder_name} for {mailbox_config.email_address}: {e}")
+                    logger.error(f"Generic error processing folder {folder_name} for {mailbox_config.email_address}: {e}", exc_info=True)
                     continue
 
             return processed_emails, new_last_uid_map
 
     except IMAPClient.LoginError as e:
-        print(f"IMAP Login failed for {mailbox_config.email_address}: {e}")
+        logger.error(f"IMAP Login failed for {mailbox_config.email_address}: {e}", exc_info=True)
         raise ConnectionError(f"IMAP Login failed for {mailbox_config.email_address}: {e}")
     except ConnectionRefusedError as e: # More specific than generic socket error
-        print(f"IMAP connection refused for {mailbox_config.imap_host}: {e}")
+        logger.error(f"IMAP connection refused for {mailbox_config.imap_host}: {e}", exc_info=True)
         raise ConnectionError(f"IMAP connection refused for {mailbox_config.imap_host}: {e}")
     except (OSError, TimeoutError) as e: # Catch other potential network errors
-        print(f"IMAP network error for {mailbox_config.imap_host}: {e}")
+        logger.error(f"IMAP network error for {mailbox_config.imap_host}: {e}", exc_info=True)
         raise ConnectionError(f"IMAP network error for {mailbox_config.imap_host}: {e}")
     except Exception as e:
-        print(f"An unexpected error occurred with IMAP operations for {mailbox_config.email_address}: {e}")
+        logger.error(f"An unexpected error occurred with IMAP operations for {mailbox_config.email_address}: {e}", exc_info=True)
         raise RuntimeError(f"An unexpected error occurred with IMAP for {mailbox_config.email_address}: {e}")
 
 # Placeholder for MailboxModel if you want to test this file directly
@@ -249,12 +250,13 @@ def fetch_emails_from_mailbox(mailbox_config: MailboxModel) -> Tuple[List[Dict[s
 # if __name__ == '__main__':
 #     # This is for testing; requires a .env file with ENCRYPTION_KEY and test IMAP details
 #     # Ensure settings.ENCRYPTION_KEY is set in .env (generate with Fernet.generate_key().decode())
-#     print(f"Using key: {settings.ENCRYPTION_KEY[:5]}... (ensure it's set in .env)")
+#     # logging.basicConfig(level=logging.INFO) # Basic logging for test
+#     # logger.info(f"Using key: {settings.ENCRYPTION_KEY[:5]}... (ensure it's set in .env)")
 
 #     # Example: Encrypt a password first
 #     # test_pw = "your_actual_imap_password"
 #     # encrypted_test_pw = encrypt_password(test_pw)
-#     # print(f"Store this encrypted password for your test_mailbox: {encrypted_test_pw}")
+#     # logger.info(f"Store this encrypted password for your test_mailbox: {encrypted_test_pw}")
 
 #     test_mailbox = MailboxModel(
 #         id=1, # Example ID
@@ -268,33 +270,33 @@ def fetch_emails_from_mailbox(mailbox_config: MailboxModel) -> Tuple[List[Dict[s
 #     )
 
 #     if "your_test_email" in test_mailbox.email_address or "gAAAAAB" not in test_mailbox.imap_password_encrypted :
-#         print("WARNING: Test IMAP credentials seem to be placeholders. Please set up environment variables for testing.")
-#         print("TEST_IMAP_EMAIL, TEST_IMAP_HOST, TEST_IMAP_PORT, TEST_IMAP_LOGIN, TEST_IMAP_ENCRYPTED_PASSWORD")
+#         logger.warning("Test IMAP credentials seem to be placeholders. Please set up environment variables for testing.")
+#         logger.warning("TEST_IMAP_EMAIL, TEST_IMAP_HOST, TEST_IMAP_PORT, TEST_IMAP_LOGIN, TEST_IMAP_ENCRYPTED_PASSWORD")
 #     else:
 #         try:
-#             print(f"Attempting to connect to {test_mailbox.imap_host} for {test_mailbox.email_address}...")
+#             logger.info(f"Attempting to connect to {test_mailbox.imap_host} for {test_mailbox.email_address}...")
 #             retrieved_emails, updated_uid_map = fetch_emails_from_mailbox(test_mailbox)
 
 #             if retrieved_emails:
-#                 print(f"Successfully fetched {len(retrieved_emails)} emails.")
+#                 logger.info(f"Successfully fetched {len(retrieved_emails)} emails.")
 #                 for mail_data in retrieved_emails:
-#                     print(f"  Subject: {mail_data.get('subject')}")
-#                     print(f"  UID: {mail_data.get('message_uid')} in Folder: {mail_data.get('folder_name')}")
-#                     print(f"  Sender: {mail_data.get('sender_address')}")
-#                     print(f"  Recipient for APT: {mail_data.get('apt_from_recipient_address')}")
-#                     print(f"  Hash: {mail_data.get('hash_body_text')}")
-#                     print(f"  Received: {mail_data.get('received_at_header')}")
-#                     # print(f"  Body Text: {mail_data.get('body_text')[:100] if mail_data.get('body_text') else 'N/A'}...")
-#                 print(f"Updated UID map for mailbox {test_mailbox.id}: {updated_uid_map}")
+#                     logger.info(f"  Subject: {mail_data.get('subject')}")
+#                     logger.info(f"  UID: {mail_data.get('message_uid')} in Folder: {mail_data.get('folder_name')}")
+#                     logger.info(f"  Sender: {mail_data.get('sender_address')}")
+#                     logger.info(f"  Recipient for APT: {mail_data.get('apt_from_recipient_address')}")
+#                     logger.info(f"  Hash: {mail_data.get('hash_body_text')}")
+#                     logger.info(f"  Received: {mail_data.get('received_at_header')}")
+#                     # logger.debug(f"  Body Text: {mail_data.get('body_text')[:100] if mail_data.get('body_text') else 'N/A'}...")
+#                 logger.info(f"Updated UID map for mailbox {test_mailbox.id}: {updated_uid_map}")
 #             else:
-#                 print("No new emails found, or an error occurred that was handled within fetch_emails_from_mailbox.")
-#             print(f"Final UID map to be stored for mailbox {test_mailbox.id}: {updated_uid_map}")
+#                 logger.info("No new emails found, or an error occurred that was handled within fetch_emails_from_mailbox.")
+#             logger.info(f"Final UID map to be stored for mailbox {test_mailbox.id}: {updated_uid_map}")
 
 #         except ValueError as ve:
-#             print(f"Configuration or Decryption Error: {ve}")
+#             logger.error(f"Configuration or Decryption Error: {ve}", exc_info=True)
 #         except ConnectionError as ce:
-#             print(f"Connection Error: {ce}")
+#             logger.error(f"Connection Error: {ce}", exc_info=True)
 #         except RuntimeError as re_service: # Renamed to avoid conflict with 're' module
-#             print(f"Runtime Error from service: {re_service}")
+#             logger.error(f"Runtime Error from service: {re_service}", exc_info=True)
 #         except Exception as e_generic: # Renamed to avoid conflict
-#             print(f"An unexpected error occurred during testing: {e_generic}", exc_info=True)
+#             logger.error(f"An unexpected error occurred during testing: {e_generic}", exc_info=True)
